@@ -54,10 +54,10 @@ fn remove_nth_from_end(head: Option<Box<ListNode>>, n: usize) -> Option<Box<List
 }
 
 fn list_size(head: &Option<Box<ListNode>>) -> usize {
-    if head.is_none() {
-        0
+    if let Some(node) = head {
+        1 + list_size(&node.next)
     } else {
-        1 + list_size(&head.as_ref().unwrap().next)
+        0
     }
 }
 
