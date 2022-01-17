@@ -12,7 +12,7 @@ fn fizz_buzz(n: usize) {
 
     thread::spawn(move || {
         while let Some(num) = receiver_in.recv().unwrap() {
-            println!("[THREAD2]: {}", num_to_fizz_buzz(num));
+            println!("[THREAD2]: {}", num_to_string(num));
             if num == n {
                 sender_out.send(None);
             } else {
@@ -25,7 +25,7 @@ fn fizz_buzz(n: usize) {
     sender_in.send(Some(1));
 
     while let Some(num) = receiver_out.recv().unwrap() {
-        println!("[THREAD1]: {}", num_to_fizz_buzz(num));
+        println!("[THREAD1]: {}", num_to_string(num));
         if num == n {
             sender_in.send(None);
         } else {
@@ -35,7 +35,7 @@ fn fizz_buzz(n: usize) {
     sender_in.send(None);
 }
 
-fn num_to_fizz_buzz(n: usize) -> String {
+fn num_to_string(n: usize) -> String {
     if n % 15 == 0 {
         "fizzbuzz".to_string()
     } else if n % 3 == 0 {
