@@ -1,3 +1,7 @@
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, Sender};
+use std::thread;
+
 fn main() {
     fizz_buzz(20);
 }
@@ -11,28 +15,24 @@ fn fizz_buzz(n: usize) {
     let (sender_out, receiver_out) = mpsc::channel();
 
     thread::spawn(move || {
-        while let Some(num) = receiver_in.recv().unwrap() {
-            println!("[THREAD2]: {}", num_to_string(num));
-            if num == n {
-                sender_out.send(None);
-            } else {
-                sender_out.send(Some(num + 1));
-            }
-        }
-        sender_out.send(None);
+        print_fizz_buzz(2, n, sender_out, receiver_in);
     });
 
     sender_in.send(Some(1));
 
-    while let Some(num) = receiver_out.recv().unwrap() {
-        println!("[THREAD1]: {}", num_to_string(num));
+    print_fizz_buzz(2, n, sender_in, receiver_out);
+}
+
+fn print_fizz_buzz(thread_id: usize, n: usize, sender: Sender<Option<usize>>, receiver: Receiver<Option<usize>>) {
+    while let Some(num) = receiver.recv().unwrap() {
+        println!("[THREAD{}]: {}", thread_id, num_to_string(num));
         if num == n {
-            sender_in.send(None);
+            sender.send(None);
         } else {
-            sender_in.send(Some(num + 1));
+            sender.send(Some(num + 1));
         }
     }
-    sender_in.send(None);
+    sender.send(None);
 }
 
 fn num_to_string(n: usize) -> String {
