@@ -20,7 +20,7 @@ fn fizz_buzz(n: usize) {
 
     sender_in.send(Some(1));
 
-    print_fizz_buzz(2, n, sender_in, receiver_out);
+    print_fizz_buzz(1, n, sender_in, receiver_out);
 }
 
 fn print_fizz_buzz(thread_id: usize, n: usize, sender: Sender<Option<usize>>, receiver: Receiver<Option<usize>>) {
