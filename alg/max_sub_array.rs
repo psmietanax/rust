@@ -5,6 +5,7 @@ fn main() {
 }
 
 // https://leetcode.com/problems/maximum-subarray/
+// Kadane's algorithm
 fn max_sub_array(nums: Vec<i32>) -> i32 {
     let mut max = 0;
     let mut max_so_far = 0;
