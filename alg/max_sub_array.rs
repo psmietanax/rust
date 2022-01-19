@@ -4,6 +4,7 @@ fn main() {
     println!("{}", max_sub_array(vec![1, -3, 2, 3, -10, 1, 1, 2]));
 }
 
+// https://leetcode.com/problems/maximum-subarray/
 fn max_sub_array(nums: Vec<i32>) -> i32 {
     let mut max = 0;
     let mut max_so_far = 0;
