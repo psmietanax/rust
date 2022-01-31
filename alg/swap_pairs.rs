@@ -26,6 +26,7 @@ impl ListNode {
   }
 }
 
+// https://leetcode.com/problems/swap-nodes-in-pairs/
 fn swap_pairs(mut node: Box<ListNode>) -> Box<ListNode> {
     if node.next.is_some() {
         let mut next_node = node.next.take().unwrap();
