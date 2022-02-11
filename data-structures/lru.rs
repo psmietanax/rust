@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::Hash;
 use linked_hash_map::LinkedHashMap;
 
 struct LRUCache<K, V> {
