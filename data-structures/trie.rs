@@ -20,7 +20,6 @@ impl Trie {
         for c in str.chars() {
             match node.child_nodes.get(&c) {
                 Some(child_node) => {
-                    println!("{:?}", child_node);
                     node = child_node;
                 },
                 None => {
@@ -29,6 +28,23 @@ impl Trie {
             }
         }
         true
+    }
+
+    fn longest_prefix(&self, str: String) -> usize {
+        let mut node = self.node.as_ref();
+        let mut counter = 0;
+        for c in str.chars() {
+            match node.child_nodes.get(&c) {
+                Some(child_node) => {
+                    counter += 1;
+                    node = child_node;
+                },
+                None => {
+                    break;
+                }
+            }
+        }
+        counter
     }
 }
 
@@ -77,6 +93,22 @@ mod tests {
         assert_eq!(trie.find("test".to_string()), false);
         assert_eq!(trie.find("answers".to_string()), false);
         assert_eq!(trie.find("theirs".to_string()), false);
+    }
+
+    #[test]
+    fn test_trie_longest_prefix() {
+        let mut trie = Trie::new();
+        trie.insert("cat".to_string());
+        trie.insert("cater".to_string());
+        trie.insert("are".to_string());
+        trie.insert("area".to_string());
+
+        // [cat]erer = 3, [cater]er = 5
+        assert_eq!(trie.longest_prefix("caterer".to_string()), 5);
+        // [are]as = 3, [area]s = 4
+        assert_eq!(trie.longest_prefix("areas".to_string()), 4);
+        // []test = 0
+        assert_eq!(trie.longest_prefix("test".to_string()), 0);
     }
 
 }
