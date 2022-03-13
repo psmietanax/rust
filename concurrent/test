@@ -1,61 +1,156 @@
-use std::cell::{Cell, UnsafeCell};
-use std::collections::LinkedList;
+use std::sync::Arc;
 use std::hint::spin_loop;
-use std::mem::MaybeUninit;
-use std::sync::{Arc, Condvar, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{Ordering, AtomicUsize, AtomicI32, fence};
+use std::cell::UnsafeCell;
+use crossbeam::utils::CachePadded;
+use std::thread;
+use std::time::{Duration, Instant};
+use std::fmt::{Display, Debug};
+use std::sync::mpsc::{channel, Sender};
+use crossbeam::queue::ArrayQueue;
 
+fn main() {
 
+    let mut timings = Vec::with_capacity(10);
 
-struct BlockingQueue<V> {
-    data: Arc<SharedData<V>>
-}
+    for _ in 1..10 {
+        let queue = RingBuffer::new(100_000);
 
-struct SharedData<V> {
-    guard: Mutex<LinkedList<V>>,
-    cond: Condvar,
-    capacity: usize
-}
-
-impl <V> BlockingQueue<V> {
-    fn new(capacity: usize) -> Self {
-        BlockingQueue {
-            data: Arc::new(SharedData {
-                guard: Mutex::new(LinkedList::new()),
-                cond: Condvar::new(),
-                capacity
-            })
+        let start = Instant::now();
+        for i in 0..4 {
+            let q = queue.clone();
+            thread::spawn(move || {
+                for j in 0..1_000_000 {
+                    q.push(i * 1_000_000 + j);
+                }
+            });
         }
-    }
-    // blocking
-    fn put(&self, v: V) {
-        let mut linkedlist = self.data.guard.lock().unwrap();
-        while linkedlist.len() == self.data.capacity {
-            linkedlist = self.data.cond.wait(linkedlist).unwrap();
-        }
-        linkedlist.push_front(v);
-        self.data.cond.notify_all();
-    }
-    fn take(&self) -> V {
-        let mut linkedlist = self.data.guard.lock().unwrap();
-        while linkedlist.len() == 0 {
-            linkedlist = self.data.cond.wait(linkedlist).unwrap();
-        }
-        let result = linkedlist.pop_back().unwrap();
-        self.data.cond.notify_all();
-        result
-    }
-}
 
-impl <V> Clone for BlockingQueue<V> {
-    fn clone(&self) -> Self {
-        BlockingQueue {
-            data: Arc::clone(&self.data)
+        let mut sum: i128 = 0;
+        loop {
+            if let Some(res) = queue.pop() {
+                sum += res;
+                if res == 3999_999 {
+                    break;
+                }
+            }
         }
-    }
-}
+        println!("SUM = {}", sum);
 
-//--
+        timings.push(start.elapsed().as_millis())
+    }
+    timings.sort();
+
+    println!("rb: {:?}", timings);
+
+    //--
+
+    let mut timings = Vec::with_capacity(10);
+
+    for _ in 1..10 {
+        let queue = CircularBuffer::new(100_000);
+        let q2 = queue.clone();
+
+        let start = Instant::now();
+        for i in 0..4 {
+            let q = queue.clone();
+            thread::spawn(move || {
+                for j in 0..1_000_000 {
+                    q.offer(i * 1_000_000 + j);
+                }
+            });
+        }
+
+        let mut sum: i128 = 0;
+        loop {
+            if let Some(num) = queue.poll() {
+                sum += num;
+                if num == 3999_999 {
+                    break;
+                }
+            }
+        }
+
+        println!("SUM = {}", sum);
+
+        timings.push(start.elapsed().as_millis())
+    }
+    timings.sort();
+
+    println!("cb: {:?}", timings);
+
+    //--
+
+    /*let mut timings = Vec::with_capacity(10);
+
+    for _ in 1..10 {
+        let (ws, rs) = channel();
+
+        let wss: [Sender<i128>; 4] = [ws.clone(), ws.clone(), ws.clone(), ws.clone()];
+
+        let start = Instant::now();
+        for i in 0..4 {
+            let q = wss[i].clone();
+            thread::spawn(move || {
+                for j in 0..1_000_000 {
+                   q.send(i as i128 * 1_000_000 + j);
+                }
+            });
+        }
+
+        let mut sum: i128 = 0;
+        loop {
+            let res = rs.recv();
+            if res.is_err() {
+                break;
+            }
+            sum += res.unwrap();
+        }
+        println!("SUM = {}", sum);
+
+        timings.push(start.elapsed().as_millis())
+    }
+    timings.sort();
+
+    println!("mpsc: {:?}", timings);*/
+
+    //--
+
+    let mut timings = Vec::with_capacity(10);
+
+    for _ in 1..10 {
+        let queue = Arc::new(ArrayQueue::new(100_000));
+        let q2 = Arc::clone(&queue);
+
+        let start = Instant::now();
+        for i in 0..4 {
+            let q = queue.clone();
+            thread::spawn(move || {
+                for j in 0..1_000_000 {
+                    q.push(i * 1_000_000 + j);
+                }
+            });
+        }
+
+        let mut sum: i128 = 0;
+        loop {
+            let res = queue.pop();
+            if let Some(num) = res {
+                sum += res.unwrap();
+                if num == 3999_999 {
+                    break;
+                }
+            }
+
+        }
+        println!("SUM = {}", sum);
+
+        timings.push(start.elapsed().as_millis())
+    }
+    timings.sort();
+
+    println!("cb: {:?}", timings);
+}
 
 struct RingBufferData<T> {
     data: UnsafeCell<Vec<Option<T>>>
@@ -85,9 +180,9 @@ impl <T> RingBufferData<T> {
 }
 
 pub struct RingBuffer<T> {
+    head_seq: Arc<CachePadded<AtomicUsize>>,
+    tail_seq: Arc<CachePadded<AtomicUsize>>,
     data: Arc<RingBufferData<T>>,
-    head_seq: Arc<AtomicUsize>,
-    tail_seq: Arc<AtomicUsize>,
     size: Arc<AtomicUsize>,
     capacity: Arc<usize>
 }
@@ -98,52 +193,24 @@ impl <T> RingBuffer<T> {
     pub fn new(capacity: usize) -> Self {
         RingBuffer {
             data: Arc::new(RingBufferData::new(capacity)),
-            head_seq: Arc::new(AtomicUsize::new(0)),
-            tail_seq: Arc::new(AtomicUsize::new(0)),
+            head_seq: Arc::new(CachePadded::new(AtomicUsize::new(0))),
+            tail_seq: Arc::new(CachePadded::new(AtomicUsize::new(0))),
             size: Arc::new(AtomicUsize::new(0)),
             capacity: Arc::new(capacity)
         }
     }
+
     pub fn size(&self) -> usize {
         self.size.load(Ordering::Acquire)
     }
-    /*pub fn push(&self, elem: T) {
+
+    pub fn push(&self, elem: T) {
         unsafe {
             loop {
-                // todo: relaxed ?
                 let idx = self.head_seq.load(Ordering::Acquire);
                 if !self.data.exists(idx) {
                     if self.head_seq.compare_exchange(idx, (idx + 1) % *self.capacity, Ordering::Release, Ordering::Relaxed).is_ok() {
                         self.data.offer(idx, elem);
-                        break;
-                    }
-                }
-            }
-        }
-    }*/
-    /*pub fn pop(&self) -> Option<T> {
-        unsafe {
-            loop {
-                let idx = self.tail_seq.load(Ordering::Acquire);
-                if self.data.exists(idx) {
-                    if self.tail_seq.compare_exchange(idx, (idx + 1) % *self.capacity, Ordering::Release, Ordering::Relaxed).is_ok() {
-                        return self.data.take(idx);
-                    }
-                }
-            }
-        }
-    }*/
-    pub fn push(&self, elem: T) {
-        unsafe {
-            loop {
-                let head = self.head_seq.load(Ordering::Acquire);
-                let tail = self.tail_seq.load(Ordering::Acquire);
-
-                if head != tail
-                    || !self.data.exists(head) {
-
-                    if self.head_seq.compare_exchange(head, (head + 1) % *self.capacity, Ordering::Release, Ordering::Relaxed).is_ok() {
-                        self.data.offer(head, elem);
                         break;
                     }
                 }
@@ -157,7 +224,7 @@ impl <T> RingBuffer<T> {
                 let idx = self.tail_seq.load(Ordering::Acquire);
                 if self.data.exists(idx) {
                     if self.tail_seq.compare_exchange(idx, (idx + 1) % *self.capacity, Ordering::Release, Ordering::Relaxed).is_ok() {
-                        return self.data.take(idx);
+                        return self.data.take(idx); // not thread-safe
                     }
                 }
                 spin_loop();
@@ -178,37 +245,144 @@ impl <T> Clone for RingBuffer<T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::sync::mpsc::channel;
-    use std::thread;
-    use std::time::Duration;
-    use actix_web::http::header::q;
-    use futures::SinkExt;
-    use tokio::time::Instant;
-    use super::*;
+// --
 
-    //#[test]
-    fn test() {
-        let rb = RingBuffer::new(10000);
-        let mut result = Vec::new();
-        for i in 0..100 {
-            let rb = rb.clone();
-            result.push(thread::spawn(move || {
-                for j in 0..100 {
-                    rb.push(i*100 + j);
-                }
-            }));
-        }
+// todo: use Option<NonNull<T>> ???
+// https://www.reddit.com/r/rust/comments/7zmfuu/when_should_nonnull_be_used/
+// todo: try Maybeuninit if we an guarantee that we never read uninit values
+struct CircularBuffer<T> {
+    mask: Arc<i32>,
+    buffer: Arc<UnsafeCell<Vec<Option<T>>>>,
+    seq: Arc<UnsafeCell<Vec<i32>>>,
+    head_seq: Arc<CachePadded<AtomicI32>>,
+    tail_seq: Arc<CachePadded<AtomicI32>>
+}
 
-        result.into_iter().for_each(|jh| { jh.join(); });
+unsafe impl <T> Send for CircularBuffer<T> { }
 
-        println!("{:?}", rb.pop());
-
-        unsafe {
-            println!("{:?}", &*rb.data.data.get());
+impl <T> Clone for CircularBuffer<T> {
+    fn clone(&self) -> Self {
+        CircularBuffer {
+            mask: Arc::clone(&self.mask),
+            buffer: Arc::clone(&self.buffer),
+            seq: Arc::clone(&self.seq),
+            head_seq: Arc::clone(&self.head_seq),
+            tail_seq: Arc::clone(&self.tail_seq),
         }
     }
+}
+
+impl <T> CircularBuffer<T> where T: Debug {
+    fn new(mut capacity: usize) -> Self {
+        let mask = capacity.next_power_of_two() as i32 - 1;
+        capacity = mask as usize + 1;
+        let mut vec: Vec<Option<T>> = Vec::with_capacity(mask as usize + 1);
+        vec.resize_with(capacity, || None);
+        let seq: Vec<i32> = (0..capacity as i32).collect();
+
+        CircularBuffer {
+            mask: Arc::new(mask),
+            buffer: Arc::new(UnsafeCell::new(vec)),
+            seq: Arc::new(UnsafeCell::new(seq)),
+            head_seq: Arc::new(CachePadded::new(AtomicI32::new(0))),
+            tail_seq: Arc::new(CachePadded::new(AtomicI32::new(0)))
+        }
+    }
+
+    fn offer(&self, elem: T) {
+        let mask = *self.mask;
+        let capacity = mask + 1;
+        let mut cIndex = i32::MIN;
+        let mut pIndex;
+        let mut seqOffset;
+        loop {
+            // read barrier
+            pIndex = self.head_seq.load(Ordering::Acquire);
+            seqOffset = (pIndex & mask) as usize;
+            let mut seq = unsafe {
+                (&mut *self.seq.get())[seqOffset]
+            };
+            if seq < pIndex {
+                if pIndex - capacity  >= cIndex {
+                    cIndex = self.tail_seq.load(Ordering::Acquire);
+                    if pIndex - capacity >= cIndex {
+                        spin_loop();
+                        continue;
+                    }
+                }
+                seq = pIndex + 1;
+            }
+            if seq <= pIndex &&
+                self.head_seq.compare_exchange_weak(pIndex, pIndex + 1, Ordering::Release, Ordering::Relaxed).is_ok() {
+                break;
+            }
+        }
+
+        unsafe {
+            let buf = &mut *self.buffer.get();
+            let idx = (pIndex & mask) as usize;
+            buf[idx] = Some(elem);
+
+            let seq = &mut *self.seq.get();
+            seq[seqOffset] = pIndex + 1;
+        }
+    }
+
+    fn poll(&self) -> Option<T> {
+        let mask = *self.mask;
+        let capacity = mask + 1;
+
+        let mut pIndex = -1;
+        let mut seqOffset;
+        let mut cIndex;
+        loop {
+            cIndex = self.tail_seq.load(Ordering::Acquire);
+            seqOffset = (cIndex & mask) as usize;
+            let mut seq = unsafe {
+                (&mut *self.seq.get())[seqOffset]
+            };
+
+            let expectedSeq = cIndex + 1;
+            if seq < expectedSeq {
+                if cIndex >= pIndex {
+                    pIndex = self.head_seq.load(Ordering::Acquire);
+                    if cIndex == pIndex {
+                        spin_loop();
+                        continue;
+                    }
+                }
+                seq = expectedSeq + 1;
+            }
+            if seq <= expectedSeq &&
+                self.tail_seq.compare_exchange_weak(cIndex, cIndex + 1, Ordering::Release, Ordering::Relaxed).is_ok() {
+                break;
+            }
+        }
+        unsafe {
+            let buf = &mut *self.buffer.get();
+            let idx = (cIndex & mask) as usize;
+
+            let ret = if buf[idx].is_none() {
+                //println!("ERROR");
+                None
+            } else {
+                buf[idx].take()
+            };
+
+            let seq = &mut *self.seq.get();
+            seq[seqOffset] = cIndex + capacity;
+
+            ret
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+    use std::time::Instant;
+    use std::thread;
 
     #[test]
     fn test_rb() {
@@ -243,6 +417,38 @@ mod tests {
     }
 
     #[test]
+    fn test_cb() {
+        let mut timings = Vec::with_capacity(10);
+
+        for _ in 1..10 {
+            let queue = CircularBuffer::new(100_000);
+            let q2 = queue.clone();
+
+            let start = Instant::now();
+            thread::spawn(move || {
+                for i in 1..1_000_000 {
+                    q2.offer(i);
+                }
+            });
+
+            let mut sum: i128 = 0;
+            loop {
+                if let Some(num) = queue.poll() {
+                    sum += num;
+                    if num == 999_999 {
+                        break;
+                    }
+                }
+            }
+
+            timings.push(start.elapsed().as_millis())
+        }
+        timings.sort();
+
+        println!("cb: {:?}", timings);
+    }
+
+    #[test]
     fn test_mpsc() {
         let mut timings = Vec::with_capacity(10);
 
@@ -270,66 +476,5 @@ mod tests {
         timings.sort();
 
         println!("mpsc: {:?}", timings);
-    }
-
-    //#[test]
-    fn test_blocking_queue() {
-        let mut timings = Vec::with_capacity(10);
-
-        for _ in 1..10 {
-            let queue = BlockingQueue::new(100_000);
-            let q2 = queue.clone();
-
-            let start = Instant::now();
-            thread::spawn(move || {
-                for i in 1..1_000_000 {
-                    q2.put(i);
-                }
-            });
-
-            let mut sum: i128 = 0;
-            loop {
-                let res = queue.take();
-                sum += res;
-                if res == 999_999 {
-                    break;
-                }
-            }
-
-            timings.push(start.elapsed().as_millis())
-        }
-        timings.sort();
-
-        println!("blocking queue: {:?}", timings);
-    }
-
-    //#[test]
-    fn test_rtrb() {
-        let mut timings = Vec::with_capacity(10);
-
-        for _ in 1..10 {
-            let (mut producer, mut consumer) = rtrb::RingBuffer::new(100_000);
-
-            let start = Instant::now();
-            thread::spawn(move || {
-                for i in 1..1_000_000 {
-                    producer.push(i);
-                }
-            });
-
-            let mut sum: i128 = 0;
-            let mut i = 0;
-            while i < 999_999 {
-                let res = consumer.pop();
-                if res.is_ok() {
-                    sum += res.unwrap();
-                    i += 1;
-                }
-            }
-            timings.push(start.elapsed().as_millis())
-        }
-        timings.sort();
-
-        println!("rtrb: {:?}", timings);
     }
 }
