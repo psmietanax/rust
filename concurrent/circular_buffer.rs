@@ -119,8 +119,7 @@ impl <T> CircularBuffer<T> where T: Debug {
             let buf = &mut *self.buffer.get();
             let idx = (tail_seq & mask) as usize;
 
-            let ret = buf[idx].take().unwrap()
-                ;
+            let ret = buf[idx].take().unwrap();
 
             let seq = &mut *self.seq.get();
             seq[seq_offset] = tail_seq + capacity;
