@@ -7,13 +7,12 @@ use chrono::{Local, DateTime};
 static SECS: u64 = 5;
 static MAX_REQS: usize = 1000;
 static REFRESH_SECS: u64 = 1;
-static BUCKET_SIZE: usize = 5;
+static BUFFER_SIZE: usize = 5;
 static THREAD_WAIT_MILLIS: u64 = 100;
 
 fn main() {
-    /*let lb = LeakyBucket::new(MAX_REQS, Duration::from_secs(REFRESH_SECS), BUCKET_SIZE, Duration::from_millis(THREAD_WAIT_MILLIS));
+    /*let lb = LeakyBucket::new(MAX_REQS, Duration::from_secs(REFRESH_SECS), BUFFER_SIZE, Duration::from_millis(THREAD_WAIT_MILLIS));
     let result = Arc::new(Mutex::new(Vec::new()));
-
     (0..4).for_each(|_| {
         let lbb = lb.clone();
         let ret = result.clone();
@@ -25,16 +24,13 @@ fn main() {
             }
         });
     });
-
     thread::sleep(Duration::from_secs(SECS));
-
     let counter = result.lock().unwrap().iter().count();
-
     println!("PERMITS: {}, allowed ~ {}", counter, MAX_REQS as u64 * SECS);*/
 
     //
 
-    let lb = TokenBucket::new(MAX_REQS, Duration::from_secs(REFRESH_SECS));
+    let lb = TokenBucket::new(MAX_REQS, Duration::from_secs(REFRESH_SECS), 10);
     let result = Arc::new(Mutex::new(Vec::new()));
 
     (0..4).for_each(|_| {
@@ -62,6 +58,10 @@ struct LeakyBucketData {
     curr_buffer_size: usize
 }
 
+/*
+   A leaky bucket algorithm to control the traffic rate.
+
+ */
 pub struct LeakyBucket {
     data: Arc<Mutex<LeakyBucketData>>,
     condvar: Arc<Condvar>,
@@ -130,7 +130,8 @@ pub struct TokenBucket {
     data: Arc<Mutex<TokenBucketData>>,
     condvar: Arc<Condvar>,
     tokens_per_interval: usize,
-    refill_interval: Duration
+    refill_interval: Duration,
+    buffer_size: usize
 }
 
 impl Clone for TokenBucket {
@@ -139,13 +140,14 @@ impl Clone for TokenBucket {
             data: Arc::clone(&self.data),
             condvar: Arc::clone(&self.condvar),
             tokens_per_interval: self.tokens_per_interval.clone(),
-            refill_interval: self.refill_interval.clone()
+            refill_interval: self.refill_interval.clone(),
+            buffer_size: self.buffer_size.clone()
         }
     }
 }
 
 impl TokenBucket {
-    pub fn new(tokens_per_interval: usize, refill_interval: Duration) -> Self {
+    pub fn new(tokens_per_interval: usize, refill_interval: Duration, buffer_size: usize) -> Self {
         assert!(tokens_per_interval > 0);
 
         TokenBucket {
@@ -155,7 +157,8 @@ impl TokenBucket {
             })),
             condvar: Arc::new(Condvar::new()),
             tokens_per_interval,
-            refill_interval
+            refill_interval,
+            buffer_size
         }
     }
     pub fn acquire(&self) -> bool {
@@ -163,8 +166,9 @@ impl TokenBucket {
 
         if Instant::now() > data.next_refill_time {
             // refill
-            data.tokens_count = self.tokens_per_interval;
+            data.tokens_count = (data.tokens_count + self.tokens_per_interval).min(self.buffer_size);
             data.next_refill_time += self.refill_interval;
+            println!("TOKENS: {}", data.tokens_count);
         }
 
         if data.tokens_count > 0 {
@@ -178,3 +182,5 @@ impl TokenBucket {
 
 // add fixed-window
 // add sliding-window
+// https://konghq.com/blog/how-to-design-a-scalable-rate-limiting-algorithm/
+// https://medium.com/@NlognTeam/design-a-scalable-rate-limiting-algorithm-system-design-nlogn-895abba44b77
